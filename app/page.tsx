@@ -1,112 +1,213 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-type PriceRow = {
-  market: string; shortMarket: string; variety: string; quality: string; origin: string;
-  unit: string; volume: number; minimum: number; maximum: number; average: number;
+type CompactRow = [number, number, number, number, number, number, string, string, string, number];
+type Snapshot = {
+  meta: { source_url: string; fetched_at: string; max_data_date: string; min_data_date: string; source_rows: number; aggregated_rows: number; file_sha256: string };
+  dates: string[]; products: string[]; markets: string[]; subsectors: string[]; units: string[];
+  product_subsectors: number[]; rows: CompactRow[];
 };
-
-type ApiPrice = {
-  fecha: string; mercado: string; variedad_tipo: string; calidad: string; origen: string;
-  unidad_comercializacion: string; volumen: number; precio_minimo: number | string;
-  precio_maximo: number | string; precio_promedio: number | string;
-};
-
-const apiBase = process.env.NEXT_PUBLIC_API_URL;
-
-const latestPapa: PriceRow[] = [
-  { market: 'Mercado Mayorista Lo Valledor de Santiago', shortMarket: 'Lo Valledor', variety: 'Rosi', quality: '1a (cosecha)', origin: 'Región del Maule', unit: '$/saco 25 kilos', volume: 2300, minimum: 13000, maximum: 14000, average: 13521.7391 },
-  { market: 'Terminal La Palmera de La Serena', shortMarket: 'La Palmera', variety: 'Rosi', quality: '1a (cosecha)', origin: 'Región del Maule', unit: '$/saco 25 kilos', volume: 2500, minimum: 17000, maximum: 18000, average: 17500 },
-  { market: 'Vega Central Mapocho de Santiago', shortMarket: 'Vega Central', variety: 'Rosara', quality: '1a (cosecha)', origin: 'Región del Maule', unit: '$/saco 25 kilos', volume: 1060, minimum: 13000, maximum: 14000, average: 13500 },
-  { market: 'Femacal de La Calera', shortMarket: 'Femacal', variety: 'Asterix', quality: '1a (guarda)', origin: "Región de O'Higgins", unit: '$/saco 25 kilos', volume: 380, minimum: 13000, maximum: 14000, average: 13500 },
-  { market: 'Macroferia Regional de Talca', shortMarket: 'Macroferia Talca', variety: 'Rosara', quality: '1a (guarda)', origin: 'Región del Maule', unit: '$/saco 25 kilos', volume: 2000, minimum: 11000, maximum: 11000, average: 11000 },
-  { market: 'Vega Modelo de Temuco', shortMarket: 'Vega Temuco', variety: 'Rosi', quality: '1a (guarda)', origin: 'Provincia de Cautín', unit: '$/saco 25 kilos', volume: 500, minimum: 11000, maximum: 11000, average: 11000 },
-  { market: 'Terminal Hortofrutícola Agro Chillán', shortMarket: 'Agro Chillán', variety: 'Asterix', quality: '1a (cosecha)', origin: 'Región de La Araucanía', unit: '$/saco 25 kilos', volume: 100, minimum: 13000, maximum: 13000, average: 13000 },
-];
+type DailyPoint = { date: string; volume: number; minimum: number; maximum: number; average: number; observations: number };
+type MarketPoint = { market: string; volume: number; minimum: number; maximum: number; average: number; observations: number };
 
 const money = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
 const number = new Intl.NumberFormat('es-CL');
+const shortDate = new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+const longDate = new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'America/Santiago' });
+const longDateTime = new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
+
+function parseDate(value: string) { return new Date(`${value}T12:00:00Z`); }
+
+function PriceChart({ points }: { points: DailyPoint[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !points.length) return;
+    const draw = () => {
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      const ratio = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const margin = { top: 20, right: 18, bottom: 42, left: 62 };
+      const chartWidth = width - margin.left - margin.right;
+      const chartHeight = height - margin.top - margin.bottom;
+      const rawMin = Math.min(...points.map((point) => point.minimum));
+      const rawMax = Math.max(...points.map((point) => point.maximum));
+      const padding = Math.max((rawMax - rawMin) * 0.12, rawMax * 0.03, 1);
+      const yMin = Math.max(0, rawMin - padding);
+      const yMax = rawMax + padding;
+      const x = (index: number) => margin.left + (points.length === 1 ? chartWidth / 2 : index * chartWidth / (points.length - 1));
+      const y = (value: number) => margin.top + (yMax - value) * chartHeight / (yMax - yMin || 1);
+
+      context.font = '11px Inter, system-ui, sans-serif';
+      context.fillStyle = '#7b8781';
+      context.strokeStyle = '#e5e4dc';
+      context.lineWidth = 1;
+      for (let tick = 0; tick <= 4; tick += 1) {
+        const value = yMin + (yMax - yMin) * tick / 4;
+        const yy = y(value);
+        context.beginPath(); context.moveTo(margin.left, yy); context.lineTo(width - margin.right, yy); context.stroke();
+        context.textAlign = 'right'; context.fillText(money.format(value), margin.left - 10, yy + 4);
+      }
+
+      const labelCount = Math.min(5, points.length);
+      for (let tick = 0; tick < labelCount; tick += 1) {
+        const index = Math.round(tick * (points.length - 1) / Math.max(labelCount - 1, 1));
+        context.textAlign = tick === 0 ? 'left' : tick === labelCount - 1 ? 'right' : 'center';
+        context.fillText(shortDate.format(parseDate(points[index].date)), x(index), height - 14);
+      }
+
+      context.beginPath();
+      points.forEach((point, index) => index === 0 ? context.moveTo(x(index), y(point.maximum)) : context.lineTo(x(index), y(point.maximum)));
+      for (let index = points.length - 1; index >= 0; index -= 1) context.lineTo(x(index), y(points[index].minimum));
+      context.closePath(); context.fillStyle = 'rgba(34,97,77,.11)'; context.fill();
+
+      const line = (field: 'minimum' | 'average' | 'maximum', color: string, widthValue: number, dash: number[] = []) => {
+        context.beginPath(); context.strokeStyle = color; context.lineWidth = widthValue; context.setLineDash(dash);
+        points.forEach((point, index) => index === 0 ? context.moveTo(x(index), y(point[field])) : context.lineTo(x(index), y(point[field])));
+        context.stroke(); context.setLineDash([]);
+      };
+      line('minimum', '#b97954', 1.5, [5, 4]);
+      line('maximum', '#7d8e66', 1.5, [5, 4]);
+      line('average', '#22614d', 3);
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [points]);
+
+  if (!points.length) return <div className="empty-chart">No hay observaciones para la combinación seleccionada.</div>;
+  return <canvas ref={canvasRef} className="price-chart" role="img" aria-label="Gráfico histórico de precio mínimo, promedio y máximo" />;
+}
 
 export default function Home() {
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [subsector, setSubsector] = useState('Todos los tipos');
   const [product, setProduct] = useState('Papa');
-  const [products, setProducts] = useState(['Papa']);
-  const [apiRows, setApiRows] = useState<PriceRow[] | null>(null);
-  const [observationDate, setObservationDate] = useState('21 ago 2026');
   const [market, setMarket] = useState('Todos los mercados');
-  const sourceRows = apiRows ?? latestPapa;
-  const filteredRows = useMemo(() => market === 'Todos los mercados' ? sourceRows : sourceRows.filter((row) => row.market === market), [market, sourceRows]);
-  const average = filteredRows.reduce((sum, row) => sum + row.average, 0) / filteredRows.length;
-  const low = Math.min(...filteredRows.map((row) => row.average));
-  const high = Math.max(...filteredRows.map((row) => row.average));
-  const volume = filteredRows.reduce((sum, row) => sum + row.volume, 0);
-  const highRow = filteredRows.find((row) => row.average === high);
-  const lowRow = filteredRows.find((row) => row.average === low);
+  const [unit, setUnit] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
 
   useEffect(() => {
-    if (!apiBase) return;
-    fetch(`${apiBase}/api/products`)
-      .then(async (response) => { if (!response.ok) throw new Error('API no disponible'); return await response.json() as string[]; })
-      .then(setProducts)
-      .catch(() => setProducts(['Papa']));
+    fetch('/data/odepa-2026.json')
+      .then(async (response) => { if (!response.ok) throw new Error('No se pudo cargar el historial'); return await response.json() as Snapshot; })
+      .then((data) => {
+        setSnapshot(data);
+        setFrom(data.dates[Math.max(0, data.dates.length - 65)]);
+        setTo(data.meta.max_data_date);
+      })
+      .catch(() => setLoadError(true));
   }, []);
 
-  useEffect(() => {
-    if (!apiBase) return;
-    fetch(`${apiBase}/api/prices?product=${encodeURIComponent(product)}&limit=1000`)
-      .then(async (response) => { if (!response.ok) throw new Error('API no disponible'); return await response.json() as ApiPrice[]; })
-      .then((data: ApiPrice[]) => {
-        if (!data.length) return;
-        const latestDate = data[0].fecha;
-        const latest = data.filter((item) => item.fecha === latestDate);
-        const units = latest.reduce<Record<string, number>>((acc, item) => ({ ...acc, [item.unidad_comercializacion]: (acc[item.unidad_comercializacion] || 0) + 1 }), {});
-        const unit = Object.entries(units).sort((a, b) => b[1] - a[1])[0][0];
-        setApiRows(latest.filter((item) => item.unidad_comercializacion === unit).map((item) => ({ market: item.mercado, shortMarket: item.mercado.replace('Mercado Mayorista ', '').replace(' de Santiago', '').replace('Terminal Hortofrutícola ', ''), variety: item.variedad_tipo, quality: item.calidad, origin: item.origen, unit: item.unidad_comercializacion, volume: item.volumen, minimum: Number(item.precio_minimo), maximum: Number(item.precio_maximo), average: Number(item.precio_promedio) })));
-        setObservationDate(new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'America/Santiago' }).format(new Date(`${latestDate}T12:00:00-04:00`)));
-      })
-      .catch(() => setApiRows(null));
-  }, [product]);
+  const productOptions = useMemo(() => {
+    if (!snapshot) return [];
+    if (subsector === 'Todos los tipos') return snapshot.products;
+    const subsectorIndex = snapshot.subsectors.indexOf(subsector);
+    return snapshot.products.filter((_, index) => snapshot.product_subsectors[index] === subsectorIndex);
+  }, [snapshot, subsector]);
+
+  const productIndex = snapshot?.products.indexOf(product) ?? -1;
+  const unitOptions = useMemo(() => {
+    if (!snapshot || productIndex < 0) return [];
+    const counts = new Map<number, number>();
+    snapshot.rows.forEach((row) => { if (row[1] === productIndex) counts.set(row[4], (counts.get(row[4]) ?? 0) + row[9]); });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([index]) => snapshot.units[index]);
+  }, [snapshot, productIndex]);
+  const effectiveUnit = unitOptions.includes(unit) ? unit : (unitOptions[0] ?? '');
+
+  const filteredRows = useMemo(() => {
+    if (!snapshot || productIndex < 0 || !effectiveUnit || !from || !to) return [];
+    const marketIndex = market === 'Todos los mercados' ? -1 : snapshot.markets.indexOf(market);
+    const unitIndex = snapshot.units.indexOf(effectiveUnit);
+    return snapshot.rows.filter((row) => row[1] === productIndex && row[4] === unitIndex && (marketIndex < 0 || row[2] === marketIndex) && snapshot.dates[row[0]] >= from && snapshot.dates[row[0]] <= to);
+  }, [snapshot, productIndex, effectiveUnit, market, from, to]);
+
+  const dailyPoints = useMemo(() => {
+    if (!snapshot) return [];
+    const groups = new Map<number, { volume: number; minimum: number; maximum: number; weighted: number; observations: number }>();
+    filteredRows.forEach((row) => {
+      const current = groups.get(row[0]) ?? { volume: 0, minimum: Infinity, maximum: -Infinity, weighted: 0, observations: 0 };
+      current.volume += row[5]; current.minimum = Math.min(current.minimum, Number(row[6])); current.maximum = Math.max(current.maximum, Number(row[7])); current.weighted += Number(row[8]) * row[5]; current.observations += row[9]; groups.set(row[0], current);
+    });
+    return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([dateIndex, group]) => ({ date: snapshot.dates[dateIndex], volume: group.volume, minimum: group.minimum, maximum: group.maximum, average: group.weighted / group.volume, observations: group.observations }));
+  }, [snapshot, filteredRows]);
+
+  const marketPoints = useMemo(() => {
+    if (!snapshot) return [];
+    const groups = new Map<number, { volume: number; minimum: number; maximum: number; weighted: number; observations: number }>();
+    filteredRows.forEach((row) => {
+      const current = groups.get(row[2]) ?? { volume: 0, minimum: Infinity, maximum: -Infinity, weighted: 0, observations: 0 };
+      current.volume += row[5]; current.minimum = Math.min(current.minimum, Number(row[6])); current.maximum = Math.max(current.maximum, Number(row[7])); current.weighted += Number(row[8]) * row[5]; current.observations += row[9]; groups.set(row[2], current);
+    });
+    return [...groups.entries()].map(([marketIndex, group]) => ({ market: snapshot.markets[marketIndex], volume: group.volume, minimum: group.minimum, maximum: group.maximum, average: group.weighted / group.volume, observations: group.observations })).sort((a, b) => b.average - a.average) as MarketPoint[];
+  }, [snapshot, filteredRows]);
+
+  const metrics = useMemo(() => {
+    if (!dailyPoints.length) return { average: 0, minimum: 0, maximum: 0, volume: 0 };
+    const volume = dailyPoints.reduce((sum, point) => sum + point.volume, 0);
+    return { average: dailyPoints.reduce((sum, point) => sum + point.average * point.volume, 0) / volume, minimum: Math.min(...dailyPoints.map((point) => point.minimum)), maximum: Math.max(...dailyPoints.map((point) => point.maximum)), volume };
+  }, [dailyPoints]);
+
+  const fetchedAt = snapshot ? longDateTime.format(new Date(snapshot.meta.fetched_at)) : '—';
+  const maxDataDate = snapshot ? longDate.format(parseDate(snapshot.meta.max_data_date)) : '—';
+
+  if (loadError) return <main className="state-page"><h1>No pudimos cargar el historial.</h1><p>La fuente quedó temporalmente indisponible. Intenta nuevamente.</p></main>;
+  if (!snapshot) return <main className="state-page"><span className="loader" /><h1>Cargando datos ODEPA…</h1></main>;
 
   return (
     <main>
       <header className="topbar">
         <a className="brand" href="#inicio" aria-label="Campo Claro, inicio"><span className="brand-mark" aria-hidden="true"><i /></span><span>Campo Claro</span></a>
-        <nav aria-label="Navegación principal"><a className="active" href="#precios">Precios</a><a href="#mercados">Mercados</a><a href="#datos">Datos</a></nav>
+        <nav aria-label="Navegación principal"><a className="active" href="#evolucion">Evolución</a><a href="#mercados">Mercados</a><a href="#fuente">Fuente</a></nav>
         <span className="official-badge"><i /> Fuente oficial ODEPA</span>
       </header>
 
       <section className="hero" id="inicio">
-        <div><p className="eyebrow">Inteligencia mayorista · Chile</p><h1>Precios del campo,<br /><em>sin ruido.</em></h1><p className="hero-copy">Consulta el historial oficial de frutas y hortalizas por producto, mercado y origen. La unidad publicada por ODEPA se conserva intacta.</p></div>
-        <div className="freshness-card" aria-label="Estado de actualización"><span className="pulse" /><div><strong>{apiRows ? 'API conectada' : 'Vista con datos ODEPA'}</strong><small>Último registro: {observationDate}</small></div><span className="freshness-time">09:00 CLT</span></div>
+        <div><p className="eyebrow">Inteligencia mayorista · Chile</p><h1>Precios del campo,<br /><em>sin ruido.</em></h1><p className="hero-copy">Consulta la evolución de los precios de frutas y hortalizas en los principales mercados de Chile.</p></div>
+        <div className="freshness-card"><span className="pulse" /><div><strong>Datos actualizados al {fetchedAt}</strong><small>Último registro ODEPA: {maxDataDate}</small></div><span className="freshness-time">CLT</span></div>
       </section>
 
-      <section className="dashboard" id="precios">
-        <div className="filters" aria-label="Filtros de precios">
-          <label>Producto<select value={product} onChange={(event) => { setProduct(event.target.value); setMarket('Todos los mercados'); }}>{products.map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>Mercado<select value={market} onChange={(event) => setMarket(event.target.value)}><option>Todos los mercados</option>{Array.from(new Set(sourceRows.map((row) => row.market))).map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>Periodo<select defaultValue="Último dato disponible"><option>Último dato disponible</option></select></label>
+      <section className="dashboard" id="evolucion">
+        <div className="filters" aria-label="Filtros del historial">
+          <label>Tipo de producto<select value={subsector} onChange={(event) => { const next = event.target.value; setSubsector(next); const index = snapshot.subsectors.indexOf(next); if (next !== 'Todos los tipos' && snapshot.product_subsectors[productIndex] !== index) setProduct(snapshot.products.find((_, productPosition) => snapshot.product_subsectors[productPosition] === index) ?? 'Papa'); setUnit(''); }}><option>Todos los tipos</option>{snapshot.subsectors.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Producto<select value={product} onChange={(event) => { setProduct(event.target.value); setUnit(''); }}>
+            {productOptions.map((item) => <option key={item}>{item}</option>)}
+          </select><small>{productOptions.length} productos disponibles</small></label>
+          <label>Mercado<select value={market} onChange={(event) => setMarket(event.target.value)}><option>Todos los mercados</option>{snapshot.markets.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Unidad original<select value={effectiveUnit} onChange={(event) => setUnit(event.target.value)}>{unitOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <div className="date-filter"><span>Rango de fechas</span><div><label><small>Desde</small><input type="date" min={snapshot.meta.min_data_date} max={to} value={from} onChange={(event) => setFrom(event.target.value)} /></label><label><small>Hasta</small><input type="date" min={from} max={snapshot.meta.max_data_date} value={to} onChange={(event) => setTo(event.target.value)} /></label></div></div>
         </div>
 
-        <div className="section-heading"><div><span className="produce-dot" /><h2>{product}</h2><span className="unit-pill">{filteredRows[0]?.unit ?? 'Unidad ODEPA'}</span></div><p>Último dato · {observationDate}</p></div>
+        <div className="section-heading"><div><span className="produce-dot" /><h2>{product}</h2><span className="unit-pill">{effectiveUnit}</span></div><p>{market} · {dailyPoints.length} días con datos</p></div>
         <div className="metrics">
-          <article className="metric featured"><span>Precio promedio</span><strong>{money.format(average || 0)}</strong><small>Promedio de {filteredRows.length} observaciones</small></article>
-          <article className="metric"><span>Mínimo observado</span><strong>{money.format(low || 0)}</strong><small>Por unidad original</small></article>
-          <article className="metric"><span>Máximo observado</span><strong>{money.format(high || 0)}</strong><small>Por unidad original</small></article>
-          <article className="metric"><span>Volumen informado</span><strong>{number.format(volume)}</strong><small>Unidades de comercialización</small></article>
+          <article className="metric featured"><span>Precio promedio ponderado</span><strong>{money.format(metrics.average)}</strong><small>Para el periodo y filtros seleccionados</small></article>
+          <article className="metric"><span>Mínimo observado</span><strong>{money.format(metrics.minimum)}</strong><small>Unidad original</small></article>
+          <article className="metric"><span>Máximo observado</span><strong>{money.format(metrics.maximum)}</strong><small>Unidad original</small></article>
+          <article className="metric"><span>Volumen informado</span><strong>{number.format(metrics.volume)}</strong><small>Unidades de comercialización</small></article>
         </div>
 
-        <div className="content-grid" id="mercados">
-          <article className="panel comparison"><div className="panel-title"><div><p>Comparación por mercado</p><h3>Precio promedio observado</h3></div><span>CLP</span></div><div className="bars">
-            {[...filteredRows].sort((a, b) => b.average - a.average).map((row, index) => <div className="bar-row" key={`${row.market}-${index}`}><span>{row.shortMarket}</span><div><i style={{ width: `${Math.max(18, (row.average / Math.max(high, 1)) * 100)}%` }} /></div><strong>{money.format(row.average)}</strong></div>)}
-          </div></article>
-          <aside className="panel insight"><p className="eyebrow">Lectura rápida</p><h3>{money.format(high - low)}</h3><p>de diferencia entre el precio promedio más alto y el más bajo del día.</p><div className="insight-rule" /><small>{highRow?.shortMarket ?? '—'} registra el valor superior; {lowRow?.shortMarket ?? '—'}, el inferior.</small></aside>
-        </div>
-
-        <article className="panel table-panel" id="datos">
-          <div className="panel-title"><div><p>Detalle oficial</p><h3>Observaciones recientes</h3></div><span>{filteredRows.length} registros</span></div>
-          <div className="table-scroll"><table><thead><tr><th>Mercado</th><th>Variedad</th><th>Origen</th><th>Volumen</th><th>Mínimo</th><th>Máximo</th><th>Promedio</th></tr></thead><tbody>{filteredRows.map((row, index) => <tr key={`${row.market}-${row.variety}-${index}`}><td><strong>{row.shortMarket}</strong><small>{row.quality}</small></td><td>{row.variety}</td><td>{row.origin}</td><td>{number.format(row.volume)}</td><td>{money.format(row.minimum)}</td><td>{money.format(row.maximum)}</td><td className="price-cell">{money.format(row.average)}</td></tr>)}</tbody></table></div>
-          <footer><span>Fuente: ODEPA · Precios mayoristas de frutas y hortalizas 2026</span><span>Los valores mantienen su unidad de comercialización original.</span></footer>
+        <article className="panel chart-panel">
+          <div className="panel-title"><div><p>Evolución histórica</p><h3>Precio mínimo, promedio y máximo</h3></div><div className="legend"><span className="legend-min">Mínimo</span><span className="legend-avg">Promedio</span><span className="legend-max">Máximo</span></div></div>
+          <PriceChart points={dailyPoints} />
+          <p className="chart-note">El promedio se pondera por el volumen informado. La banda representa el rango mínimo–máximo. Nunca se mezclan unidades de comercialización distintas.</p>
         </article>
+
+        <article className="panel table-panel" id="mercados">
+          <div className="panel-title"><div><p>Comparación</p><h3>Resumen por mercado</h3></div><span>{marketPoints.length} mercados</span></div>
+          <div className="table-scroll"><table><thead><tr><th>Mercado</th><th>Observaciones</th><th>Volumen</th><th>Mínimo</th><th>Máximo</th><th>Promedio ponderado</th></tr></thead><tbody>{marketPoints.map((row) => <tr key={row.market}><td><strong>{row.market}</strong></td><td>{number.format(row.observations)}</td><td>{number.format(row.volume)}</td><td>{money.format(row.minimum)}</td><td>{money.format(row.maximum)}</td><td className="price-cell">{money.format(row.average)}</td></tr>)}</tbody></table></div>
+        </article>
+
+        <aside className="source-card" id="fuente"><div><p className="eyebrow">Trazabilidad de datos</p><h3>{number.format(snapshot.meta.source_rows)} filas originales verificadas</h3><p>La interfaz usa una instantánea generada directamente desde el CSV oficial. Contiene {snapshot.products.length} productos, {snapshot.markets.length} mercados y {snapshot.units.length} unidades. El histórico original permanece sin modificaciones.</p></div><a href={snapshot.meta.source_url} target="_blank" rel="noreferrer">Abrir CSV oficial ↗</a></aside>
       </section>
     </main>
   );
