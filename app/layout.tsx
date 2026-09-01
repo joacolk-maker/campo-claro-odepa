@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://campo-claro-odepa.juacolk.chatgpt.site'),
+  metadataBase: new URL('https://juacolk-pixel.github.io/campo-claro-odepa/'),
   title: 'Campo Claro | Precios mayoristas ODEPA',
   description: 'Evolución de precios de frutas y hortalizas en los principales mercados de Chile.',
   openGraph: {

@@ -16,6 +16,7 @@ const number = new Intl.NumberFormat('es-CL');
 const shortDate = new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: 'short', timeZone: 'UTC' });
 const longDate = new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'America/Santiago' });
 const longDateTime = new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' });
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 
 function parseDate(value: string) { return new Date(`${value}T12:00:00Z`); }
 
@@ -188,7 +189,7 @@ export default function Home() {
   const [to, setTo] = useState('');
 
   useEffect(() => {
-    fetch('/data/odepa-2026.json')
+    fetch(`${basePath}/data/odepa-2026.json`)
       .then(async (response) => { if (!response.ok) throw new Error('No se pudo cargar el historial'); return await response.json() as Snapshot; })
       .then((data) => {
         setSnapshot(data);
