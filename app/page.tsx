@@ -109,7 +109,7 @@ function closestHistoricalPoint(points: DailyPoint[], targetDate: string, tolera
   })[0];
 }
 function seriesKey(snapshot: HistoricalSnapshot, row: CompactRow) {
-  return JSON.stringify([snapshot.subsectors[row[3]], snapshot.products[row[4]], snapshot.varieties[row[5]], snapshot.qualities[row[6]], snapshot.units[row[7]]]);
+  return JSON.stringify([snapshot.subsectors[row[3]], snapshot.products[row[4]], snapshot.varieties[row[5]], snapshot.qualities[row[6]]]);
 }
 function dimensionOptions(rows: SnapshotRow[], valueFor: (entry: SnapshotRow) => string, representativeOnly: boolean) {
   const statistics = new Map<string, { observations: number; dates: Set<string> }>();

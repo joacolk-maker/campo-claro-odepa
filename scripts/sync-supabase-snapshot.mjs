@@ -126,7 +126,10 @@ async function rebuildManifest(updatedSnapshot) {
       source_rows: meta.source_rows,
       aggregated_rows: meta.aggregated_rows,
     });
-    for (const field of Object.keys(dimensions)) snapshot[field].forEach((value) => dimensions[field].add(value));
+    const dimensionIndexes = { regions: 1, markets: 2, subsectors: 3, products: 4, varieties: 5, qualities: 6, units: 7 };
+    for (const row of snapshot.rows) {
+      for (const [field, index] of Object.entries(dimensionIndexes)) dimensions[field].add(snapshot[field][row[index]]);
+    }
   }
 
   return {
@@ -141,6 +144,30 @@ async function rebuildManifest(updatedSnapshot) {
   };
 }
 
+function publicationKey(row) {
+  return JSON.stringify([row.subsector, row.producto, row.variedad, row.calidad]);
+}
+
+function snapshotPublicationKey(snapshot, row) {
+  return JSON.stringify([
+    snapshot.subsectors[row[3]], snapshot.products[row[4]],
+    snapshot.varieties[row[5]], snapshot.qualities[row[6]],
+  ]);
+}
+
+async function filterHistoricalSnapshots(allowedSeries) {
+  const current = JSON.parse(await readFile(join(dataDirectory, 'manifest.json'), 'utf8'));
+  for (const entry of current.years) {
+    if (entry.year === DATA_YEAR) continue;
+    const path = join(dataDirectory, entry.file);
+    const snapshot = JSON.parse(await readFile(path, 'utf8'));
+    snapshot.rows = snapshot.rows.filter((row) => allowedSeries.has(snapshotPublicationKey(snapshot, row)));
+    snapshot.meta.source_rows = snapshot.rows.length;
+    snapshot.meta.aggregated_rows = snapshot.rows.length;
+    await writeFile(path, `${JSON.stringify(snapshot)}\n`);
+  }
+}
+
 const viewRows = await exactCount('precios_web');
 // La clave publicable solo puede leer la vista autorizada. Usamos ese total como
 // universo público sin abrir precios_raw ni incorporar la clave de servicio.
@@ -149,10 +176,23 @@ console.log(`Supabase: ${viewRows} filas publicas`);
 const rows = await fetchAllRows(viewRows);
 if (rows.length !== viewRows) throw new Error(`Se esperaban ${viewRows} filas de precios_web y llegaron ${rows.length}.`);
 
+// precios_web es el unico catalogo editorial. Sus cuatro dimensiones visibles
+// se aplican tambien al historial, dejando libres todas las unidades disponibles.
+const allowedSeries = new Set(rows.map(publicationKey));
 const snapshot = compactSnapshot(rows, sourceRows);
-const manifest = await rebuildManifest(snapshot);
 await writeFile(join(dataDirectory, `odepa-${DATA_YEAR}.json`), `${JSON.stringify(snapshot)}\n`);
+await filterHistoricalSnapshots(allowedSeries);
+const manifest = await rebuildManifest(snapshot);
 await writeFile(join(dataDirectory, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+await writeFile(join(dataDirectory, 'series-rules.json'), `${JSON.stringify({
+  schema_version: 1,
+  generated_at: snapshot.meta.snapshot_generated_at,
+  source: 'supabase.precios_web',
+  matching_dimensions: ['subsector', 'product', 'variety', 'quality'],
+  total_rules: allowedSeries.size,
+  allowed_rules: allowedSeries.size,
+  allowed_series: [...allowedSeries].sort(),
+})}\n`);
 
 console.log(JSON.stringify({
   year: DATA_YEAR,
@@ -160,4 +200,5 @@ console.log(JSON.stringify({
   aggregated_rows: snapshot.meta.aggregated_rows,
   min_data_date: snapshot.meta.min_data_date,
   max_data_date: snapshot.meta.max_data_date,
+  publication_rules: allowedSeries.size,
 }));
