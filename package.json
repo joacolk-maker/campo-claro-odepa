@@ -9,7 +9,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ignore-pattern out --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern out --ignore-pattern .next",
+    "sync:supabase": "node scripts/sync-supabase-snapshot.mjs",
+    "validate:data": "node scripts/validate-snapshot.mjs",
+    "build:seasonality": "node scripts/build-seasonality.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
