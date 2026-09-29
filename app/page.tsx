@@ -36,7 +36,14 @@ type MarketPoint = { market: string; date: string; volume: number; minimum: numb
 type MarketDailyPoint = MarketPoint;
 type Variation = { days: number; value: number; markets?: number };
 type PublicationRules = { schema_version: 1; generated_at: string; source: string; matching_dimensions: string[]; total_rules: number; allowed_rules: number; allowed_series: string[] };
-type SeasonalitySnapshot = { schema_version: 1; baseline_years: number[]; methodology: string; products: Record<string, { months: { month: number; label: string; availability: number; relativeAvailability: number; category: string; pricePressure: number | null }[] }> };
+type SeasonalityRow = [number, number, number, number, number, number, number, number[]];
+type SeasonalitySnapshot = {
+  schema_version: 2;
+  baseline_years: number[];
+  methodology: string;
+  dimensions: Record<'regions' | 'markets' | 'subsectors' | 'products' | 'varieties' | 'qualities' | 'units', string[]>;
+  rows: SeasonalityRow[];
+};
 type GeoPoint = { lat: number; lon: number; source: 'gps' | 'region' };
 
 const money = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
@@ -51,6 +58,7 @@ const allSubsectors = 'Todos los subsectores';
 const allVarieties = 'Todas las variedades';
 const allQualities = 'Todas las calidades';
 const variationPeriods = [7, 14, 30, 60, 90, 180, 360];
+const monthLabels = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const marketColors = ['#22614d', '#b97954', '#7d8e66', '#8a6f9e', '#3f7f91', '#c19b3c', '#9a5e43', '#64748b', '#9b6b7a', '#4f8068', '#826f4f', '#5f718f'];
 const MINIMUM_REPRESENTATIVE_DAYS = 5;
 const regionCoordinates: Record<string, [number, number]> = {
@@ -70,10 +78,10 @@ function distanceKm(a: GeoPoint, b: [number, number]) { const earth = 6371; cons
 function isoDate(value: Date) { return value.toISOString().slice(0, 10); }
 function formatMetric(value: number, formatter: Intl.NumberFormat) { return Number.isFinite(value) ? formatter.format(value) : '—'; }
 function seasonDescription(category?: string) {
-  if (category === 'Nula') return 'sin oferta reportada';
-  if (category === 'Escasa') return 'oferta escasa';
-  if (category === 'Media') return 'oferta intermedia';
-  return 'temporada alta';
+  if (category === 'Nula') return 'sin volumen informado';
+  if (category === 'Escasa') return 'volumen bajo';
+  if (category === 'Media') return 'volumen intermedio';
+  return 'volumen alto';
 }
 function axisLabel(date: string, spanDays: number) {
   const value = parseDate(date);
@@ -480,7 +488,31 @@ export default function Home() {
     const referenceIndex = comparable.reduce((sum, item) => sum + item.reference * item.weight, 0) / totalWeight;
     return { days, value: referenceIndex ? (currentIndex / referenceIndex - 1) * 100 : Number.NaN, markets: comparable.length };
   }), [marketPoints, marketVariationDailyPoints]);
-  const productSeasonality = seasonality?.products[effectiveProduct];
+  const productSeasonality = useMemo(() => {
+    if (!seasonality || !effectiveProduct || !effectiveUnit) return null;
+    const { dimensions, rows } = seasonality;
+    const volumes = Array(12).fill(0);
+    rows.forEach((row) => {
+      const [rowRegion, rowMarket, rowSubsector, rowProduct, rowVariety, rowQuality, rowUnit, monthlyVolumes] = row;
+      if ((region !== allRegions && dimensions.regions[rowRegion] !== region)
+        || (selectedMarkets.length > 0 && !selectedMarkets.includes(dimensions.markets[rowMarket]))
+        || (subsector !== allSubsectors && dimensions.subsectors[rowSubsector] !== subsector)
+        || dimensions.products[rowProduct] !== effectiveProduct
+        || (effectiveVariety !== allVarieties && dimensions.varieties[rowVariety] !== effectiveVariety)
+        || (effectiveQuality !== allQualities && dimensions.qualities[rowQuality] !== effectiveQuality)
+        || dimensions.units[rowUnit] !== effectiveUnit) return;
+      monthlyVolumes.forEach((volume, index) => { volumes[index] += volume; });
+    });
+    const maximum = Math.max(...volumes, 0);
+    if (!maximum) return null;
+    return {
+      months: volumes.map((volume, index) => {
+        const relativeVolume = volume / maximum;
+        const category = relativeVolume < .15 ? 'Nula' : relativeVolume < .4 ? 'Escasa' : relativeVolume < .75 ? 'Media' : 'Alta';
+        return { month: index + 1, label: monthLabels[index], volume, relativeVolume, category };
+      }),
+    };
+  }, [seasonality, region, selectedMarkets, subsector, effectiveProduct, effectiveVariety, effectiveQuality, effectiveUnit]);
   const selectedSeason = productSeasonality?.months[seasonalityMonth - 1];
 
   const setQuickRange = (days?: number) => {
@@ -557,8 +589,8 @@ export default function Home() {
         </>}
 
         {productSeasonality && <section className="seasonality-card" aria-label={`Estacionalidad de ${effectiveProduct}`}>
-          <div className="seasonality-copy"><p className="eyebrow">Calendario de mercado</p><h3>¿Cuándo suele haber oferta de {effectiveProduct}?</h3><p>Señal de disponibilidad observada en ODEPA, calculada con días reportados entre {seasonality?.baseline_years[0]} y {seasonality?.baseline_years.at(-1)}. No mezcla unidades ni calidades.</p><div className="seasonality-current"><span className="season-dot" /><div><strong>{selectedSeason?.label}: {seasonDescription(selectedSeason?.category)}</strong><small>{selectedSeason ? `${Math.round(selectedSeason.relativeAvailability * 100)}% de la actividad mensual máxima observada para este producto` : ''}</small></div></div></div>
-          <div className="seasonality-chart"><label>Consultar mes<select value={seasonalityMonth} onChange={(event) => setSeasonalityMonth(Number(event.target.value))}>{productSeasonality.months.map((item) => <option key={item.month} value={item.month}>{item.label}</option>)}</select></label><div className="season-bars" aria-label="Índice mensual de disponibilidad">{productSeasonality.months.map((item) => <button type="button" className={item.month === seasonalityMonth ? 'active' : ''} key={item.month} title={`${item.label}: ${item.category}`} onClick={() => setSeasonalityMonth(item.month)}><span style={{ height: `${Math.max(8, item.relativeAvailability * 100)}%` }} /><small>{item.label.slice(0, 3)}</small></button>)}</div>{selectedSeason?.pricePressure !== null && selectedSeason?.pricePressure !== undefined && <small className="season-price-note">En ese mes, el precio promedio histórico estuvo {selectedSeason.pricePressure >= 0 ? 'por encima' : 'por debajo'} de su nivel anual habitual ({Math.abs(selectedSeason.pricePressure * 100).toFixed(0)}%).</small>}</div>
+          <div className="seasonality-copy"><p className="eyebrow">Estacionalidad histórica</p><h3>¿Cuándo se transa más {effectiveProduct}?</h3><p>Promedio mensual del volumen transado informado por ODEPA entre {seasonality?.baseline_years[0]} y {seasonality?.baseline_years.at(-1)}, usando la selección actual de región, mercado, variedad, calidad y unidad. No representa la oferta total disponible.</p><div className="seasonality-current"><span className="season-dot" /><div><strong>{selectedSeason?.label}: {seasonDescription(selectedSeason?.category)}</strong><small>{selectedSeason ? `${Math.round(selectedSeason.relativeVolume * 100)}% del mes de mayor volumen histórico para esta selección` : ''}</small></div></div></div>
+          <div className="seasonality-chart"><label>Consultar mes<select value={seasonalityMonth} onChange={(event) => setSeasonalityMonth(Number(event.target.value))}>{productSeasonality.months.map((item) => <option key={item.month} value={item.month}>{item.label}</option>)}</select></label><div className="season-bars" aria-label="Índice mensual de volumen transado histórico">{productSeasonality.months.map((item) => <button type="button" className={item.month === seasonalityMonth ? 'active' : ''} key={item.month} title={`${item.label}: ${number.format(item.volume)} unidades promedio`} onClick={() => setSeasonalityMonth(item.month)}><span style={{ height: `${Math.max(8, item.relativeVolume * 100)}%` }} /><small>{item.label.slice(0, 3)}</small></button>)}</div></div>
         </section>}
 
         <div className="variation-section">
