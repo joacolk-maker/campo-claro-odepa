@@ -4,57 +4,55 @@ import { join } from 'node:path';
 const dataDir = join(process.cwd(), 'public/data');
 const manifest = JSON.parse(await readFile(join(dataDir, 'manifest.json'), 'utf8'));
 const baselineYears = manifest.years.map((item) => item.year).filter((year) => year < 2026);
-const availability = new Map();
-const activityCounts = new Map();
-const seriesStats = new Map();
-const labels = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+// Una fila por serie exacta. La interfaz suma únicamente las filas que
+// corresponden a los filtros elegidos, sin confundir volumen con registros ODEPA.
+const dimensionNames = ['regions', 'markets', 'subsectors', 'products', 'varieties', 'qualities', 'units'];
+const dimensions = Object.fromEntries(dimensionNames.map((name) => [name, []]));
+const indexes = Object.fromEntries(dimensionNames.map((name) => [name, new Map()]));
+const dimensionIndex = (name, value) => {
+  const index = indexes[name];
+  if (!index.has(value)) {
+    index.set(value, dimensions[name].length);
+    dimensions[name].push(value);
+  }
+  return index.get(value);
+};
+const series = new Map();
 
 for (const year of baselineYears) {
   const snapshot = JSON.parse(await readFile(join(dataDir, `odepa-${year}.json`), 'utf8'));
   snapshot.rows.forEach((row) => {
-    const date = snapshot.dates[row[0]]; const month = Number(date.slice(5, 7)); const product = snapshot.products[row[4]];
-    const productMonths = availability.get(product) ?? new Map();
-    const dates = productMonths.get(month) ?? new Set(); dates.add(date); productMonths.set(month, dates); availability.set(product, productMonths);
-    const seriesKey = JSON.stringify([snapshot.subsectors[row[3]], product, snapshot.varieties[row[5]], snapshot.qualities[row[6]], snapshot.units[row[7]]]);
-    const productActivity = activityCounts.get(product) ?? Array(12).fill(0); productActivity[month - 1] += 1; activityCounts.set(product, productActivity);
-    const current = seriesStats.get(seriesKey) ?? { product, totalVolume: 0, totalValue: 0, months: new Map() };
-    const volume = Number(row[8]); const value = Number(row[11]) * volume;
-    current.totalVolume += volume; current.totalValue += value;
-    const monthStat = current.months.get(month) ?? { volume: 0, value: 0 };
-    monthStat.volume += volume; monthStat.value += value; current.months.set(month, monthStat); seriesStats.set(seriesKey, current);
+    const month = Number(snapshot.dates[row[0]].slice(5, 7));
+    const key = [
+      dimensionIndex('regions', snapshot.regions[row[1]]),
+      dimensionIndex('markets', snapshot.markets[row[2]]),
+      dimensionIndex('subsectors', snapshot.subsectors[row[3]]),
+      dimensionIndex('products', snapshot.products[row[4]]),
+      dimensionIndex('varieties', snapshot.varieties[row[5]]),
+      dimensionIndex('qualities', snapshot.qualities[row[6]]),
+      dimensionIndex('units', snapshot.units[row[7]]),
+    ];
+    const id = key.join(',');
+    const current = series.get(id) ?? { key, volumes: Array(12).fill(0) };
+    current.volumes[month - 1] += Number(row[8]);
+    series.set(id, current);
   });
 }
 
-const pressure = new Map();
-for (const stat of seriesStats.values()) {
-  if (!stat.totalVolume || !stat.totalValue) continue;
-  const baseline = stat.totalValue / stat.totalVolume;
-  for (const [month, monthStat] of stat.months) {
-    if (!monthStat.volume) continue;
-    const values = pressure.get(stat.product) ?? Array.from({ length: 12 }, () => []);
-    values[month - 1].push((monthStat.value / monthStat.volume) / baseline - 1); pressure.set(stat.product, values);
-  }
-}
+const rows = [...series.values()].map(({ key, volumes }) => [
+  ...key,
+  volumes.map((value) => Math.round(value / baselineYears.length)),
+]);
 
-const products = {};
-for (const [product, months] of availability) {
-  const ratios = Array.from({ length: 12 }, (_, index) => {
-    const observed = [...(months.get(index + 1) ?? [])].length;
-    const possible = baselineYears.reduce((sum, year) => sum + new Date(Date.UTC(year, index + 1, 0)).getUTCDate(), 0);
-    return observed / Math.max(possible, 1);
-  });
-  const activity = activityCounts.get(product) ?? Array(12).fill(0);
-  const maximum = Math.max(...activity, 1);
-  products[product] = { months: ratios.map((availabilityRatio, index) => {
-    // La estacionalidad se apoya en la intensidad de reportes del producto,
-    // no en una sola combinación de calidad, unidad o mercado.
-    const relative = activity[index] / maximum;
-    const category = relative < .15 ? 'Nula' : relative < .4 ? 'Escasa' : relative < .75 ? 'Media' : 'Alta';
-    const pressureValues = (pressure.get(product)?.[index] ?? []).sort((a, b) => a - b);
-    const pressureValue = pressureValues.length ? pressureValues[Math.floor(pressureValues.length / 2)] : null;
-    return { month: index + 1, label: labels[index], availability: Number(availabilityRatio.toFixed(3)), relativeAvailability: Number(relative.toFixed(3)), category, pricePressure: pressureValue === null ? null : Number(pressureValue.toFixed(3)) };
-  }) };
-}
+const output = {
+  schema_version: 2,
+  baseline_years: baselineYears,
+  methodology: 'Promedio mensual histórico del volumen transado informado por ODEPA, calculado por serie comercial exacta.',
+  dimensions,
+  rows,
+};
 
-await writeFile(join(dataDir, 'seasonality.json'), `${JSON.stringify({ schema_version: 1, baseline_years: baselineYears, methodology: 'Disponibilidad observada por días reportados; presión de precio normalizada dentro de cada serie comercial.', products })}\n`);
-console.log(`Estacionalidad calculada para ${Object.keys(products).length} productos usando ${baselineYears.length} años completos.`);
+await writeFile(join(dataDir, 'seasonality-v2.json'), `${JSON.stringify(output)}\n`);
+console.log(`Estacionalidad calculada para ${rows.length} series exactas usando ${baselineYears.length} años completos.`);
+
