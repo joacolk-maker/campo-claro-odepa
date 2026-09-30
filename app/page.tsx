@@ -304,7 +304,7 @@ export default function Home() {
 
 
   useEffect(() => {
-    fetch(`${basePath}/data/seasonality.json`)
+    fetch(`${basePath}/data/seasonality-v2.json`)
       .then(async (response) => { if (!response.ok) return null; return await response.json() as SeasonalitySnapshot; })
       .then((data) => setSeasonality(data))
       .catch(() => setSeasonality(null));
@@ -494,6 +494,7 @@ export default function Home() {
     const volumes = Array(12).fill(0);
     rows.forEach((row) => {
       const [rowRegion, rowMarket, rowSubsector, rowProduct, rowVariety, rowQuality, rowUnit, monthlyVolumes] = row;
+      if (!Array.isArray(monthlyVolumes) || monthlyVolumes.length !== 12) return;
       if ((region !== allRegions && dimensions.regions[rowRegion] !== region)
         || (selectedMarkets.length > 0 && !selectedMarkets.includes(dimensions.markets[rowMarket]))
         || (subsector !== allSubsectors && dimensions.subsectors[rowSubsector] !== subsector)
